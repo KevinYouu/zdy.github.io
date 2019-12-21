@@ -1,0 +1,719 @@
+<?xml version="1.0" encoding="utf-8"?>
+<search> 
+  
+  
+    
+    <entry>
+      <title>shell脚本自动化</title>
+      <link href="/shell-jiao-ben-zi-dong-hua.html"/>
+      <url>/shell-jiao-ben-zi-dong-hua.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><h3 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h3><p>最近朋友给了一台服务器给我玩,但是随机密码太难记了,每次去收藏找手动输入又太麻烦了,又没有密钥,所以只好想办法自动输入密码(我这么懒要我手动输入密码???不可能的,想都不要想)</p><h3 id="shell脚本的运行方式"><a href="#shell脚本的运行方式" class="headerlink" title="shell脚本的运行方式"></a>shell脚本的运行方式</h3><p>在编写ssh自动登陆脚本之前，先说一下shell脚本的基础，此基础不是一些语法什么的，网上到处都是，这里总结了一下shell脚本的运行机制~<br>首先要说一下shell的几种启动方式，正是踩了脚本启动的坑，才使用原来十分钟就搞定的脚本，花了两个小时才搞定。同时也使得我们运行shell，知其所以然。<br>这里的mac系统我使用的是command后缀的shell脚本</p><p><strong>通过文件名执行</strong><br>shell脚本可以直接通过文件名执行，需要注意的是文件需要执行权限。通过 sudo chmod +x ./file_name.sh 来给文件添加执行权限；<br><strong>指定脚本解释器来执行文件</strong></p><p>我们常用的 sh file_name.sh 就是指定了脚本解释器 /bin/sh来解释执行脚本；常见的脚本解释器还有：/bin/bash等，我们可以使用ls -l /bin/*sh命令来查看当前可用的脚本解释器；</p><p><strong>使用. ./file_name或source命令执行脚本</strong><br>这种方式不会像前两种方式一样fork一个子进程去执行脚本，而是使用当前shell环境执行，用于 .bashrc或者.bash_profile被修改的时候，我们不必重启shell或者重新登录系统，就能使当前的更改生效。</p><p>我们写一个shell脚本时，总是习惯在最前面加上一行 #!/binbash,它就是脚本的shebang,至于为什么叫这么个奇怪的名字，C语言和Unix的开发者丹尼斯·里奇称它为可能是类似于”hash-bang”的英国风描述性文字；</p><p>贴一段wiki上的解释:</p><blockquote><p>在计算机科学中，Shebang是一个由井号和叹号构成的字符串行，其出现在文本文件的第一行的前两个字符。 在文件中存在Shebang的情况下，类Unix操作系统的程序载入器会分析Shebang后的内容，将这些内容作为解释器指令，并调用该指令，并将载有Shebang的文件路径作为该解释器的参数。<br>简单的说，它指示了此脚本运行时的解释器，所以，使用文件名直接执行shell脚本时，必须带上shebang; 此外，我们还可以在shebang后面直接附加选项，执行时我们默认使用选项执行；<br>test.sh的shebang为 #!/bin/sh -x，那我们执行脚本时:</p></blockquote><p><code>./test.sh hello</code><br>等于<br><code>bin/sh -x ./test.sh hello;</code><br>而编写一个ssh自动登陆脚本，需要用到的shebang(解释器)为 /usr/bin/expect;</p><p>需要注意的是：在指定脚本解释器来执行脚本时，shebang会被指定的脚本解释器覆盖，即优先使用指定的脚本解释器来执行脚本（习惯性地用sh ./test.sh却提示command not found）</p><h3 id="expect解释器"><a href="#expect解释器" class="headerlink" title="expect解释器"></a>expect解释器</h3><p>这才是今天的主角<br>expect是一个能实现自动和交互式任务的解释器，它也能解释常见的shell语法命令，其特色在以下几个命令：</p><hr><p><strong>spawn命令</strong>：<br><code>spawn command</code>命令会fork一个子进程去执行<code>command</code>命令，然后在此子进程中执行后面的命令；<br>在ssh自动登陆脚本中，我们使用 <code>spawn ssh user_name@ip_str</code>，fork一个子进程执行ssh登陆命令；<br><strong>expect命令</strong>：<br>expect命令是expect解释器的关键命令，它的一般用法为 expect “string”,即期望获取到string字符串,可在在string字符串里使用 * 等通配符;<br>string与命令行返回的信息匹配后，expect会立刻向下执行脚本；<br><strong>set timeout命令：</strong><br>set timeout n命令将expect命令的等待超时时间设置为n秒，在n秒内还没有获取到其期待的命令，expect 为false,脚本会继续向下执行；<br><strong>send命令：</strong><br>send命令的一般用法为 send “string”,它们会我们平常输入命令一样向命令行输入一条信息，当然不要忘了在string后面添加上 \r 表示输入回车；<br><strong>interact命令：</strong><br>interact命令很简单，执行到这条命令时，脚本fork的子进程会将操作权转交给用户，允许用户与当前shell进行交互；</p><hr><h3 id="完整脚本如下"><a href="#完整脚本如下" class="headerlink" title="完整脚本如下"></a>完整脚本如下</h3><pre class="line-numbers language-bash"><code class="language-bash"><span class="token comment" spellcheck="true">#!/usr/bin/expect                   // 指定shebang</span><span class="token keyword">set</span> <span class="token function">timeout</span> 3                       // 设定超时时间为3秒spawn <span class="token function">ssh</span> user_name@192.168.1.1    // fork一个子进程执行ssh命令<span class="token function">expect</span> <span class="token string">"*password*"</span>                 // 等待匹配到 <span class="token string">'user_name@ip_string'</span>s password:' send <span class="token string">"my_password\r"</span>                // 向命令行输入密码并回车send <span class="token string">"sudo -s\r"</span>                    //这句和下一句可省略send <span class="token string">"cd /data/logs\r"</span>              // 帮我切换到常用的工作目录interact                            // 执行到这里将将交互权移交给用户<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></span></code></pre><p><img src="jiaoben.png" alt=""><br>执行 <code>sudo chmod +x ./test.sh</code>命令给shell脚本添加执行权限；</p><h3 id="效果"><a href="#效果" class="headerlink" title="效果"></a>效果</h3><p>Mac使用脚本直接执行或者拖进终端回车即可执行,效果如图<br><img src="xiaoguo.gif" alt=""></p>]]></content>
+      
+      
+      <categories>
+          
+          <category> Linux </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> Linux </tag>
+            
+            <tag> 操作系统 </tag>
+            
+            <tag> Unix </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>黑苹果驱动声卡</title>
+      <link href="/hei-ping-guo-qu-dong-sheng-qia.html"/>
+      <url>/hei-ping-guo-qu-dong-sheng-qia.html</url>
+      
+        <content type="html"><![CDATA[<p>安装黑苹果之后如何驱动声卡呢?(注入声卡ID)<br><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><hr><h3 id="第一步"><a href="#第一步" class="headerlink" title="第一步"></a>第一步</h3><p>首先去下载并安装最新的<a href="https://github.com/acidanthera/Lilu/releases" target="_blank" rel="noopener">Lilu</a> + <a href="https://github.com/acidanthera/AppleALC/releases" target="_blank" rel="noopener">AppleALC</a></p><h3 id="第二步"><a href="#第二步" class="headerlink" title="第二步"></a>第二步</h3><p>安装必备驱动<br>将其放置在</p><pre><code>/Volumes/EFI/EFI/CLOVER/kexts/Other</code></pre><p>如图所示<br><img src="lilu.png" alt=""></p><h3 id="第三步"><a href="#第三步" class="headerlink" title="第三步"></a>第三步</h3><p><a href="https://mackie100projects.altervista.org/download-clover-configurator" target="_blank" rel="noopener">Clover Configurator</a>设置禁用注入声卡ID,否则驱动会有冲突,产生莫名其妙的bug<br><img src="clover.png" alt=""></p><h3 id="第四步"><a href="#第四步" class="headerlink" title="第四步"></a>第四步</h3><p>Clover-&gt;DSDT 重命名 (如果检测到)<br>• AZAL-&gt;HDEF<br>• HDAS -&gt; HDEF<br><img src="dsdt.png" alt=""></p><h3 id="第五步"><a href="#第五步" class="headerlink" title="第五步"></a>第五步</h3><p>在 Hackintool 工具中点击 声音&gt; Layout ID &gt;适合自己声卡的ID<br>我的声卡是alc235,效果选择14和28效果最好<br><img src="shengyin.png" alt=""></p><h3 id="第六步"><a href="#第六步" class="headerlink" title="第六步"></a>第六步</h3><p>文件-&gt;导出-&gt;Clover config.plist (覆盖现在的config.plist文件)<br><img src="fugai.png" alt=""></p><h3 id="第七步"><a href="#第七步" class="headerlink" title="第七步"></a>第七步</h3><p>重新启动</p><hr><p>如果尝试所有 Layout ID 但仍有问题，请尝试勾选 核显-&gt; 应用补丁-&gt; 高级-&gt; 仿冒声卡ID 选项。 如果这依然不起作用，那么尝试安装 <a href="https://bitbucket.org/RehabMan/os-x-fake-pci-id/downloads/" target="_blank" rel="noopener">FakePCIID.kext</a> + <a href="https://bitbucket.org/RehabMan/os-x-fake-pci-id/downloads/" target="_blank" rel="noopener">FakePCIID_Intel_HDMI_Audio.kext</a></p>]]></content>
+      
+      
+      <categories>
+          
+          <category> 黑苹果 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> 黑苹果 </tag>
+            
+            <tag> 系统优化 </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>Photoshop2020更新内容及下载</title>
+      <link href="/photoshop2020-geng-xin-nei-rong-ji-xia-zai.html"/>
+      <url>/photoshop2020-geng-xin-nei-rong-ji-xia-zai.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><h2 id="Photoshop2020更新介绍"><a href="#Photoshop2020更新介绍" class="headerlink" title="Photoshop2020更新介绍"></a>Photoshop2020更新介绍</h2><p>首先是图标上的变化,它变圆了,最终还是被生活磨平了棱角,也变白了,然后还少了CC2个字<br><img src="tubiao.png" alt=""></p><h3 id="功能上的变化"><a href="#功能上的变化" class="headerlink" title="功能上的变化"></a>功能上的变化</h3><p>在文件保存时多了一个云保存功能<br><img src="baocun.png" alt=""></p><hr><p><strong>此处为官方解释：</strong><br>云文档指的是 Adobe 的云端原生文件，您可以在任何 Adobe 兼容应用程序中轻松打开和编辑这些文档。云文档让您能够跨设备无缝访问您的工作成果。您只需连接到 Internet，然后从相关应用程序主屏幕的云文档选项卡中打开您的 PSD 即可，接下来，就可以从上次停下来的位置继续进行文档处理。<br>把创意作品存储为云文档后，您将专享以下优势：<br>跨设备无缝访问文件：可从任何地方访问您的工作成果，包括桌面上的 Photoshop、笔记本电脑上的 Photoshop、iPad 上的 Photoshop 以及 Adobe Fresco。无论您在何处工作，您的工作成果都会安全地存储到云端。<br>跨产品使用文件：在 Photoshop 桌面版中创建的云文档可以直接在 iPad 上的 Adobe Fresco 或 Photoshop 中使用。反之亦然。<br>确保您的文件保持最新并且安全无虞：云文档自动存储您的最新版本。这意味着，无论是坐在办公桌旁还是沙发上，您都可以跨设备从上次停下来的位置继续进行文档处理。<br>离线工作：重新连接到 Internet 时，离线版本将自动同步。对于 Photoshop 桌面版而言，离线工作与以前的版本相比没有变化。<br>云文档、Creative Cloud 文件和其他同步文件是您的成员资格中随附的部分 Creative Cloud 服务，并且会计入您的 Creative Cloud 存储空间分配。</p><hr><h3 id="预设的改进"><a href="#预设的改进" class="headerlink" title="预设的改进"></a>预设的改进</h3><p>预设渐变色的改进<br><img src="jianbian.png" alt=""></p><hr><p>预设经过重新设计，在最新版本的 Photoshop 中带来了焕然一新的体验。<br>从菜单栏中，转到窗口 &gt; 色板、渐变、图案、形状或样式。现在，您可以获得：<br>新型现代化默认预设，如渐变、图案、形状和样式。<br>适合渐变、图案和形状的专用面板。<br>实现管理预设的能力：将预设整理编组。您只需在面板中简单地拖动并移动预设，即可重新排列和重新排序预设。<br>实现将渐变、图案、色板和样式从“预设”面板拖到画布上的能力。<br>画布上实时呈现的预览效果，具体方法是：单击并浏览多个预设，以尝试不同的外观。<br>另外，您仍可以通过从上下文面板菜单中启用旧版预设选项，来访问熟悉的旧版预设。</p><hr><h3 id="AI抠图"><a href="#AI抠图" class="headerlink" title="AI抠图"></a>AI抠图</h3><p>新手的一大福利,框选要抠图的区域,智能选区<br><img src="duixiang.png" alt=""></p><hr><p>新增的对象选择工具由 Adobe Sensei 提供支持，该工具可以简化在图像中选择单个对象、多个对象，或对象的某些部分（人物、汽车、家具、宠物、衣服等）的过程。<br>只需在对象周围绘制矩形区域或套索，对象选择工具就会自动选择已定义区域内的对象，从而加速完成最为复杂的选择。<br>您可以在以下位置访问对象选择工具：<br>通过 Photoshop 中主要的应用 -“工具”面板，与快速选择和魔棒工具位于同一组内。<br>通过选择并遮住工作区中的“工具”面板。</p><hr><h3 id="默认长宽比缩放"><a href="#默认长宽比缩放" class="headerlink" title="默认长宽比缩放"></a>默认长宽比缩放</h3><p><img src="moren.png" alt=""><br>现在，无论什么图层类型，也无需使用 Shift 键，就可以实现按比例变换多个图层。<br>在这一版本的 Photoshop 中，变换行为出现了以下变化和改进：<br>现在，默认的变换行为是按比例缩放所有图层类型和对象，由选项栏中处于“开”状态的保持长宽比按钮（链接图标）来表示。<br>要将默认的变换行为更改为不按比例缩放，只需单击保持长宽比按钮以将其关闭即可。<br>现在，按下 Shift 键可用作保持长宽比按钮的切换开关。如果保持长宽比按钮处于“开”状态，那么按下 Shift 键则会切换到“关”状态，反之亦然。<br>如今，Photoshop 会记住您上一次的变换行为设置（按比例或不按比例缩放），当您下一次启动 Photoshop 时，该设置将是您的默认变换行为。<br>想要切换回旧版变换行为？<br>从菜单栏中，选取编辑 (Win)/Photoshop (Mac) &gt; 首选项 &gt; 常规，然后选择旧版自由变换。</p><hr><h3 id="属性面板的改进"><a href="#属性面板的改进" class="headerlink" title="属性面板的改进"></a>属性面板的改进</h3><p>首先是像素图层,增加变换、对齐与分布、删除背景、选择主体<br><img src="xaingsu.png" alt=""><br>然后是文档的变化<br><img src="wendang.png" alt=""><br>最后是文字图层的变化<br><img src="wenzi.png" alt=""></p><hr><h3 id="智能对象转换为图层"><a href="#智能对象转换为图层" class="headerlink" title="智能对象转换为图层"></a>智能对象转换为图层</h3><p><img src="zhuanhuan.png" alt=""><br>在此版本的 Photoshop 中，您可以轻松将智能对象转换回组件图层，而无需执行任何额外步骤。<br>只需从图层面板中选择智能对象，然后执行以下任意操作即可：<br>右键单击/按住 Control 键的同时单击智能对象，然后从上下文菜单中选取转换为图层。<br>从菜单栏中，选取图层 &gt; 智能对象 &gt; 转换为图层。</p><hr><h3 id="加强版变换变形功能"><a href="#加强版变换变形功能" class="headerlink" title="加强版变换变形功能"></a>加强版变换变形功能</h3><p><img src="bianhuan.png" alt=""><br>利用“变形”工具的增强功能，您可以在 Photoshop 中更好地控制创意变形。只需在任意位置控制点，或者使用可自定义的网格划分图像，然后根据各个节点或较大的选区进行变换即可。凭借“变形”工具，您现在可以执行以下操作：<br>选取新的预设网格大小选项：3 x 3、4 x 4、5 x 5。<br>创建自定义大小的网格。<br>添加您自己的网格线和锚点。<br>删除网格线。<br>选择并拖动多个锚点。<br>还原编辑变形期间的各个步骤。<br>要尝试其功能，请选取编辑 &gt; 变换 &gt; 变形。</p><hr><h3 id="OpenType-字体的风格组合"><a href="#OpenType-字体的风格组合" class="headerlink" title="OpenType 字体的风格组合"></a>OpenType 字体的风格组合</h3><p><img src="opentype.png" alt=""><br>需要安装OpenType字体才可使用<br>执行下列操作之一：<br>1.选择文字工具并创建新的文字图层。<br>2.在“图层”面板中选择一个或多个文字图层。<br>3.选择文字工具并在文字图层中选择特定的文本排布。<br>转到属性面板（窗口 &gt; 属性）。<br>在属性面板中，向下滚动到“文字选项”节。如有必要，展开此节。<br>单击“风格组合”的图标以打开菜单。<br>选取所需的风格组合。</p><hr><h3 id="增强了“内容识别填充”功能"><a href="#增强了“内容识别填充”功能" class="headerlink" title="增强了“内容识别填充”功能"></a>增强了“内容识别填充”功能</h3><p>将天鹅从湖面中去掉,效果如图<br><img src="neirongshibie.png" alt=""><br>在这一版本的 Photoshop 中，“内容识别填充”工作区新增了三个取样区域选项。您可以使用这些选项，确定图像中您希望 Photoshop 查找源像素来填充内容的取样区域。<br>自动：使用类似于填充区域周围的内容。<br>矩形：使用填充区域周围的矩形区域。<br>自定义：使用手动定义的取样区域。您可以准确地识别要从哪些像素中进行填充。<br>要尝试新增的选项，请打开图像并选择要填充的区域。接下来，选取编辑 &gt; 内容识别填充。取样区域选项会显示在工作区右侧的“内容识别填充”面板中。</p><hr><h3 id="将“亮度-对比度”和“曲线”调整用于在-32-位文档中调整图层"><a href="#将“亮度-对比度”和“曲线”调整用于在-32-位文档中调整图层" class="headerlink" title="将“亮度/对比度”和“曲线”调整用于在 32 位文档中调整图层"></a>将“亮度/对比度”和“曲线”调整用于在 32 位文档中调整图层</h3><p>由于macOS 15.1是纯64位系统,此处无法演示<br>现在，您可以在 32 位文档中，将曲线和亮度/对比度调整用于直接调整、调整图层或智能滤镜，这对于 HDR 工作流程尤为有用。</p><hr><h3 id="应用程序中的“新增功能”屏幕"><a href="#应用程序中的“新增功能”屏幕" class="headerlink" title="应用程序中的“新增功能”屏幕"></a>应用程序中的“新增功能”屏幕</h3><p>Mac版没有还是破解版没有???<br><img src="shouye2.png" alt=""><br><img src="shouye.png" alt=""><br>现在，您可以在应用程序中查看 Photoshop 的新增功能。<br>要阅读 Photoshop 新增功能的概述，请转到主页屏幕，然后单击右侧的在应用程序中打开。</p><hr><h3 id="动画-GIF-支持"><a href="#动画-GIF-支持" class="headerlink" title="动画 GIF 支持"></a>动画 GIF 支持</h3><p><img src="donghua.png" alt=""><br>现在，您可以直接通过文件 &gt; 存储为选项，以 GIF 格式存储包含图框的 Photoshop 文档。通过文件 &gt; 存储为选项进行存储时，GIF 存储选项对话框中显示的所有选项均支持编写动画 GIF。</p><hr><p>新建文档对话框的性能得到改进<br>由于这一版本的 Photoshop 实施了多项改进，现在，新建文档对话框（文件 &gt; 新建）几乎可以立即打开。</p><hr><h3 id="“镜头模糊”的性能得到改进"><a href="#“镜头模糊”的性能得到改进" class="headerlink" title="“镜头模糊”的性能得到改进"></a>“镜头模糊”的性能得到改进</h3><p>此处选择蜜蜂选区,进行反向镜头模糊,速度好像变快点了<br><img src="jingtoumohu.png" alt=""><br>由于对“镜头模糊”实施了改进，您可以更好地利用相机拍摄的图像中的深度信息。现在，您可以设置一个焦点，以选取要进行模糊处理的内容，并在图像中保持焦点。由于 GPU 的功能得以改进，您还可以在应用“镜头模糊”滤镜时体验到性能的提升。</p><hr><h3 id="改进了“文档”选项卡"><a href="#改进了“文档”选项卡" class="headerlink" title="改进了“文档”选项卡"></a>改进了“文档”选项卡</h3><p>在这一版本中，新增了一个关闭其他选项，该选项允许您关闭当前文档之外的所有打开的文档（窗口、浮动或停放）。您可以通过以下方式访问此选项：<br>从菜单栏中，选取文件 &gt; 关闭其他。<br>在“文档”选项卡上右键单击 (Win)/按住 Control 键单击 (Mac)，然后从上下文菜单中选择关闭其他。<br>使用键盘快捷键：<br>Win：Ctrl + Alt + P<br>Mac：Command + Option + P</p><hr><h3 id="智能对象与图层复合跟踪"><a href="#智能对象与图层复合跟踪" class="headerlink" title="智能对象与图层复合跟踪"></a>智能对象与图层复合跟踪</h3><p>虽然不知道有啥用,但是还是写出来,总有大佬看得懂:）<br><img src="tucengfuhe.png" alt=""><br>现在，您可以在智能对象中存储图层复合的变化，以节省手动设置每个变化的时间。选取窗口 &gt; 图层复合。<br>在新建图层复合对话框中，新增了一个智能对象的图层复合选区选项。<br>在图层复合窗口的底部，增加了用于更新智能对象的图层复合选区的选项。</p><hr><h3 id="“全球通用版面”文本引擎选项"><a href="#“全球通用版面”文本引擎选项" class="headerlink" title="“全球通用版面”文本引擎选项"></a>“全球通用版面”文本引擎选项</h3><p><img src="wenziyinqin.png" alt=""><br>这一版本的 Photoshop 引入了一个新的全球通用版面文本引擎选项，该选项可以为文档中的印度语、中东和东南亚脚本提供正确的字形。如需将其设置为首选文本引擎选项，请选取编辑 (Win)/Photoshop (Mac) &gt; 首选项 &gt; 文字，然后选择选取文本引擎选项下的全球通用版面。</p><hr><h3 id="首选项设置为自动显示主屏幕"><a href="#首选项设置为自动显示主屏幕" class="headerlink" title="首选项设置为自动显示主屏幕"></a>首选项设置为自动显示主屏幕</h3><p>Windows系统使用Ctrl+k/Mac使用Command+k进行设置<br><img src="qidongpingmu.png" alt=""><br>在首选项中，您可以选择在启动 Photoshop 时自动显示或禁用主屏幕。选取编辑 (Win)/Photoshop (Mac) &gt; 首选项 &gt; 常规，然后选中或取消选中自动显示主屏幕。</p><hr><h3 id="更改的功能"><a href="#更改的功能" class="headerlink" title="更改的功能"></a>更改的功能</h3><p>现在，除了“首选项”&gt;“常规”&gt;“使用旧版自由变换”首选项以外，在调用操作（每次选择“编辑”&gt;“自由变换”，或每次使用键盘快捷键 Cmd/Ctrl + T）和启动操作（每次退出 Photoshop 后再重新启动）期间，变换选项卡上的“保持长宽比”链接图标也将具有粘滞性。注意：不论“保持长宽比”链接图标处于何种状态，按下 Shift 键后，该图标都将变为与当前状态相反的状态。<br>现在，“对象选择”工具是第 4 个槽位中的默认工具，之前，该槽位中的默认工具是“快速选择”。单击并按住“对象选择”工具，可显示“快速选择”工具和“魔棒”工具；按下 W 键，可循环使用这两个工具。<br>旧版本 Photoshop 中提供的预设现在称作“旧版预设”，这些预设已被新版预设所取代。要载入旧版预设，请转到预设面板的任一菜单，然后选择“载入旧版预设”。注意：如果未载入旧版预设，某些操作可能会失败。解决方法：- 载入旧版预设<br>现在，如果您在启动时收到“暂存盘已满”错误消息，系统会向您显示一个用户界面，在该用户界面中选择其他暂存盘后，您可以再继续操作。<br>已将“首选项”&gt;“常规”&gt;“自动更新打开的文档”设置更改为“首选项”&gt;“常规”&gt;“自动更新打开的基于文件的文档”设置，该设置可决定是否要自动重新读取在 Photoshop 之外更新后打开的基于文件的文档；云文档不受该设置影响。<br>已将“首选项”&gt;“常规”&gt;“禁用主屏幕”设置更改为“首选项”&gt;“常规”&gt;“自动显示主屏幕”设置，该设置将在未打开任何文档时自动显示主屏幕。<br>已增加“首选项”&gt;“文件处理”&gt;“本地云文件工作目录”设置，以允许您选择用于存储相关云文档文件的本地目录。<br>已将“文字”&gt;“从 Typekit 添加字体…”更改为“文字”&gt;“来自 Adobe Fonts 的更多字体”。<br>默认情况下，Photoshop 中将不再提供 TOYO COLOR FINDER 色板。请联系 Toyo Ink，以获取其颜色库。</p><hr><h2 id="最后-下载地址"><a href="#最后-下载地址" class="headerlink" title="最后,下载地址"></a>最后,下载地址</h2><p>Windows版链接: <a href="https://pan.baidu.com/s/1DKlKG3rpVrWtKXM6Mw6UxQ" target="_blank" rel="noopener">https://pan.baidu.com/s/1DKlKG3rpVrWtKXM6Mw6UxQ</a> 提取码: 1pn5<br>Mac版链接: 链接: <a href="https://pan.baidu.com/s/1ncgY1_g8_tv-IkgT5VedDw" target="_blank" rel="noopener">https://pan.baidu.com/s/1ncgY1_g8_tv-IkgT5VedDw</a> 提取码: pnmh </p>]]></content>
+      
+      
+      <categories>
+          
+          <category> 学习日志 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> Photoshop </tag>
+            
+            <tag> 学习 </tag>
+            
+            <tag> 计算机 </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>自动跳过首屏启动广告</title>
+      <link href="/zi-dong-tiao-guo-shou-ping-qi-dong-guang-gao.html"/>
+      <url>/zi-dong-tiao-guo-shou-ping-qi-dong-guang-gao.html</url>
+      
+        <content type="html"><![CDATA[<h3 id="第一步-下载软件"><a href="#第一步-下载软件" class="headerlink" title="第一步 下载软件"></a>第一步 下载软件</h3><p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站</i><br>首先下载软件，名为轻启动,传送门:<br><a href="http://zy.zdynb.cn/app/qqd.apk" target="_blank" rel="noopener">轻启动下载</a><br>安装软件并打开,如图所示<br><img src="qidong.jpg" alt=""></p><h3 id="第二步-开启权限"><a href="#第二步-开启权限" class="headerlink" title="第二步 开启权限"></a>第二步 开启权限</h3><p>开启权限，这里以华为的EMUI系统为例,依次为设置&gt;更多设置&gt;无障碍&gt;更多已下载服务&gt;轻启动<br><img src="shouquan.jpg" alt=""><br>点击去授权来到此界面,点击开启辅助服务<br><img src="shouquan2.jpg" alt=""><br>拉到设置最下面,选择下载服务下面的轻启动<br><img src="fuzhu.jpg" alt=""><br>打开开关并确认<br><img src="fuzhu2.jpg" alt=""></p><h3 id="第三步-打开悬浮窗提示"><a href="#第三步-打开悬浮窗提示" class="headerlink" title="第三步 打开悬浮窗提示"></a>第三步 打开悬浮窗提示</h3><p>打开悬浮窗权限（跳过启动广告时的提示）<br>允许悬浮窗进入设置进行授权<br><img src="shouquan3.jpg" alt=""></p><h3 id="第四步-开启自动启动权限"><a href="#第四步-开启自动启动权限" class="headerlink" title="第四步 开启自动启动权限"></a>第四步 开启自动启动权限</h3><p>设置自动启动权限（保证在开机后自动开启跳过广告的服务,包括持续在后台运行）<br>在启动设置里打开<br><img src="ziqidong.jpg" alt=""></p><h3 id="第五步-忽略电池优化"><a href="#第五步-忽略电池优化" class="headerlink" title="第五步 忽略电池优化"></a>第五步 忽略电池优化</h3><p><img src="dianchi.jpg" alt=""></p><h3 id="第六步-在任务界面锁定"><a href="#第六步-在任务界面锁定" class="headerlink" title="第六步 在任务界面锁定"></a>第六步 在任务界面锁定</h3><p>在任务切换界面中锁定/隐藏，避免一键优化杀死进程<br><img src="suoding.jpg" alt=""></p><h3 id="第七步-在任务列表显示-可选"><a href="#第七步-在任务列表显示-可选" class="headerlink" title="第七步 在任务列表显示(可选)"></a>第七步 在任务列表显示(可选)</h3><p>在任务列表隐藏掉进程,点击并重启应用<br><img src="yincang.jpg" alt=""><br>OK,教程结束</p>]]></content>
+      
+      
+      <categories>
+          
+          <category> Android </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> 系统优化 </tag>
+            
+            <tag> Android </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>vscode使用心得</title>
+      <link href="/vscode-shi-yong-xin-de.html"/>
+      <url>/vscode-shi-yong-xin-de.html</url>
+      
+        <content type="html"><![CDATA[<h3 id="靓仔编辑器"><a href="#靓仔编辑器" class="headerlink" title="靓仔编辑器"></a>靓仔编辑器</h3><p>如何打造一个属于自己的个性编辑器?废话不多说,直接上教程<i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站</i></p><h4 id="1-安装vscode"><a href="#1-安装vscode" class="headerlink" title="1.安装vscode"></a>1.安装vscode</h4><p>选择自己的平台进行下载<br><a href="https://code.visualstudio.com/Download" target="_blank" rel="noopener">微软官网下载传送门</a><br><img src="xiazai.png" alt=""></p><h4 id="2-必备插件"><a href="#2-必备插件" class="headerlink" title="2.必备插件"></a>2.必备插件</h4><p>首先是中文插件，输入Chinese，第一个就是<br><img src="zhongwen.png" alt=""><br>然后是主题，个人比较喜欢lastroom这个主题，包含light和dark版的<br><img src="zhuti.png" alt=""><br>sublime键盘设置导入<br>此扩展程序将最受欢迎的Sublime Text键盘快捷键移植到Visual Studio Code。<br>安装此扩展程序后，只需重新启动VS Code，您最喜欢的Sublime Text键盘快捷键将在VS Code中提供。首次启动扩展程序时，会显示提示，让您导入Sublime设置。<br><img src="sublime.png" alt=""><br>markdown支持,编写Markdown所有需要的东西（键盘快捷键，目录，自动预览等）<br><img src="markdown.png" alt=""><br>为vscode增加全局半透明和毛玻璃效果<br><img src="maoboli.png" alt=""><br>注意此处设置<br>auto：自动切换系统版本。<br>dwm：仅Windows 7）Windows Aero模糊。<br>acrylic：（仅适用于Windows 10）Fluent Design模糊。<br>appearance-based，浅色，深色，标题栏，选择，菜单，弹出框，侧边栏，中亮，超暗：（仅适用于MacOS）<br><img src="setting.png" alt=""></p>]]></content>
+      
+      
+      <categories>
+          
+          <category> 学习日志 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> 学习 </tag>
+            
+            <tag> 开发工具 </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>macOS10.15解锁系统分区</title>
+      <link href="/macos10-15-jie-suo-xi-tong-fen-qu.html"/>
+      <url>/macos10-15-jie-suo-xi-tong-fen-qu.html</url>
+      
+        <content type="html"><![CDATA[<h2 id="解锁原因"><a href="#解锁原因" class="headerlink" title="解锁原因"></a>解锁原因</h2><p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i><br>macOS 10.15的一个最大变化就是Apple锁定了系统分区，导致L/E以及S/L/E无法拷贝文件。Kext Utility无法重建缓存。也间接影响了HomeBrew的使用，下面教大家如何解锁系统分区。</p><h2 id="第一种方式"><a href="#第一种方式" class="headerlink" title="第一种方式"></a>第一种方式</h2><h3 id="新建shell脚本手动进行解锁"><a href="#新建shell脚本手动进行解锁" class="headerlink" title="新建shell脚本手动进行解锁"></a>新建shell脚本手动进行解锁</h3><p>新建文本文档并将扩展名改为command并输入以下内容</p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token shebang important">#!/bin/bash</span><span class="token function">sudo</span> <span class="token function">mount</span> -uw /<span class="token function">killall</span> Finder<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span></span></code></pre><p><img src="jiaoben.png" alt=""></p><h3 id="添加执行权限"><a href="#添加执行权限" class="headerlink" title="添加执行权限"></a>添加执行权限</h3><p>打开终端输入</p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">chmod</span> +x 加上脚本路径<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p><img src="zhixingquanxian.png" alt=""></p><h3 id="运行脚本"><a href="#运行脚本" class="headerlink" title="运行脚本"></a>运行脚本</h3><p>以后每次需要解锁就可以双击脚本文件就可以解锁了</p><h2 id="第二种方式"><a href="#第二种方式" class="headerlink" title="第二种方式"></a>第二种方式</h2><p>直接添加为开机启动项,每次开机自动解锁分区</p><h3 id="首先打开名为自动操作自带软件"><a href="#首先打开名为自动操作自带软件" class="headerlink" title="首先打开名为自动操作自带软件"></a>首先打开名为自动操作自带软件</h3><p><img src="jiesuo.png" alt=""></p><h3 id="然后新建文档-选择应用程序"><a href="#然后新建文档-选择应用程序" class="headerlink" title="然后新建文档,选择应用程序"></a>然后新建文档,选择应用程序</h3><p><img src="tianjaijiaoben.png" alt=""></p><h3 id="搜索shell-并添加"><a href="#搜索shell-并添加" class="headerlink" title="搜索shell,并添加"></a>搜索shell,并添加</h3><p><img src="xinjianshell.png" alt=""></p><h3 id="粘贴以下内容"><a href="#粘贴以下内容" class="headerlink" title="粘贴以下内容"></a>粘贴以下内容</h3><p><img src="zhantie.png" alt=""></p><h3 id="保存"><a href="#保存" class="headerlink" title="保存"></a>保存</h3><p><img src="baocun.png" alt=""></p><h3 id="添加开机启动"><a href="#添加开机启动" class="headerlink" title="添加开机启动"></a>添加开机启动</h3><p>开机自动运行脚本解锁system,在设置&gt;用户与群组&gt;登陆项下添加刚刚创建的程序,设置为开机启动<br><img src="kaijiqidong.png" alt=""></p>]]></content>
+      
+      
+      <categories>
+          
+          <category> 操作系统 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> 黑苹果 </tag>
+            
+            <tag> 操作系统 </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>让mac只使用一个输入法</title>
+      <link href="/mac-zhi-shi-yong-yi-ge-shu-ru-fa.html"/>
+      <url>/mac-zhi-shi-yong-yi-ge-shu-ru-fa.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><h3 id="为什么要删除"><a href="#为什么要删除" class="headerlink" title="为什么要删除?"></a>为什么要删除?</h3><p>1.由于Mac的输入法与Windows不同，ABC和自带拼音输入法是分离的，自带切换默认是大写锁定键(caps lock)，和Windows大写键冲突,mac端输入切换输入法是Ctrl+空格切换下一个,Ctrl+shift+空格是切换上一个；新版系统设置默认最少要保留一个自带的输入法，这就造成了使用第三方输入法的时候，有的时候输入法会莫名其妙地自动切换回自带的输入法。之前，可以通过在输入源添加越南文的方法方便直接地删除掉所有的自带输入法，保留一个第三方输入法。可是由于新系统的特殊性，这个方法在10.12 Sierra下已经不适用了。有些老Mac用户会把command + space的spotlight快捷键改为切换输入法，也能很好地避免这个问题。</p><h3 id="教程开始"><a href="#教程开始" class="headerlink" title="教程开始"></a>教程开始</h3><p>1.接下来就是删除教程,首先准备所需要的材料<br>需要的软件:PlistEdit Pro<br><img src="PlistEdit.png" alt=""></p><h3 id="打开要修改的文件"><a href="#打开要修改的文件" class="headerlink" title="打开要修改的文件"></a>打开要修改的文件</h3><p>在“终端”里输入命令sudo open ~/Library/Preferences/com.apple.HIToolbox.plist（dock栏选择“Launchpad”—“其他”文件夹—“终端”）,前提是默认打开软件是PlistEdit Pro,不然会被其他软件打开,如果无法更改就打开Finder,手动输入路径~/Library/Preferences/,然后搜索com.apple.HIToolbox.plist,然后选择打开方式,选择PlistEdit Pro</p><h3 id="选择PlistEdit-Pro打开"><a href="#选择PlistEdit-Pro打开" class="headerlink" title="选择PlistEdit Pro打开"></a>选择PlistEdit Pro打开</h3><p>选中“Root”—“AppleEnabledInputSources”， 接着会跳出名为“0、1、2、3、4、5、6”的文件夹，逐个翻阅各个文件夹，待找到出现“ABC”关键字样的文件夹时，删除整个以数字命名的文件。保存，关闭。由于我已经删除了,所以这里没有ABC的选项<img src="shanchu.png" alt=""></p><h3 id="重启"><a href="#重启" class="headerlink" title="重启"></a>重启</h3><p>大功告成（万一某天又想用自带输入法了，只要在偏好设置-键盘-输入法里，按“+”号，把自带的输入法重新添加就可以了）<br><img src="tianjia.png" alt=""></p>]]></content>
+      
+      
+      <categories>
+          
+          <category> 操作系统 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> 黑苹果 </tag>
+            
+            <tag> 系统优化 </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>一键开启hidpi</title>
+      <link href="/yi-jian-kai-qi-hidpi.html"/>
+      <url>/yi-jian-kai-qi-hidpi.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><h3 id="什么是hidpi"><a href="#什么是hidpi" class="headerlink" title="什么是hidpi"></a>什么是hidpi</h3><p>1.在Windows下可以选择分辨率和缩放来控制全局的字体及图表大小,但是在mac下,只有调节分辨率,低了看起来很模糊,高了字和图标又太小,那么这应该怎么办呢?</p><h3 id="为何要开启"><a href="#为何要开启" class="headerlink" title="为何要开启"></a>为何要开启</h3><p>2.真正的白苹果屏幕分辨率一般都在2k(钞能力)以上,自然是自动开启这个功能,但是黑苹果一般分辨率都是1920*1080,默认不开启,一般笔记本15寸看起来特别费眼睛,那么有什么办法可以让字体变大而又不模糊呢?</p><h3 id="打开终端执行"><a href="#打开终端执行" class="headerlink" title="打开终端执行"></a>打开终端执行</h3><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">bash</span> -c <span class="token string">"<span class="token variable"><span class="token variable">$(</span>curl -fsSL https://raw.githubusercontent.com/xzhih/one-key-hidpi/master/hidpi.sh<span class="token variable">)</span></span>"</span><span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>第一步选择是否打开hidpi<br><img src="hidpi.png" alt=""><br>第二步选择要显示的图标<br><img src="icon.png" alt=""><br>第三步选择分辨率,1080p建议选择第二个,睡眠后不会导致只显示4分之1屏幕<br><img src="fbl.png" alt=""><br>开启成功之后以后每次开机logo会变大,在默认1080p下,开机第二阶段logo会变为原来的2倍大,因为这个分辨率是仿冒的;调节默认的分辨率为1424*802可以让logo只变为原来的1.35倍,不至于大的接受不了<br><img src="tiaojie.png" alt=""></p><h3 id="如何恢复"><a href="#如何恢复" class="headerlink" title="如何恢复?"></a>如何恢复?</h3><p>1.<strong>命令恢复</strong></p><p>如果还能进系统，就再次运行命令选择选项 3 关闭 HIDPI。<br>2.<strong>恢复模式</strong><br>如果使用此脚本后，开机无法进入系统，请到 macos 恢复模式中或使用 clover -x 安全模式进入系统，打开终端</p><p>这里有两种方式进行关闭，建议选第一种<br>(1)快捷恢复</p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">ls</span> /Volumes/<span class="token function">cd</span> /Volumes/你的系统盘/System/Library/Displays/Contents/Resources/Overrides/HIDPI./disable<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span></span></code></pre><p>(2)手动恢复<br>使用终端删除 <strong>/System/Library/Displays/Contents/Resources/Overrides</strong> 下删除显示器 VendorID 对应的文件夹，并把 <strong>HIDPI/backup</strong> 文件夹中的备份复制出来。</p><p>请使用单个显示器执行以下命令，笔记本关闭外接显示器的 HIDPI 时请关闭内置显示器</p><p>(3)命令如下执行</p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">ls</span> /Volumes/<span class="token function">cd</span> /Volumes/你的系统盘/System/Library/Displays/Contents/Resources/OverridesEDID<span class="token operator">=</span><span class="token punctuation">(</span><span class="token punctuation">$(</span>ioreg -lw0 <span class="token operator">|</span> <span class="token function">grep</span> -i <span class="token string">"IODisplayEDID"</span> <span class="token operator">|</span> <span class="token function">sed</span> -e <span class="token string">"/[^&lt;]*&lt;/s///"</span> -e <span class="token string">"s/\>//"</span><span class="token punctuation">))</span>Vid<span class="token operator">=</span><span class="token punctuation">(</span><span class="token variable"><span class="token variable">$(</span><span class="token keyword">echo</span> $EDID <span class="token operator">|</span> <span class="token function">cut</span> -c18-20<span class="token variable">)</span></span><span class="token punctuation">)</span><span class="token function">rm</span> -rf ./DisplayVendorID-<span class="token variable">$Vid</span><span class="token function">cp</span> -r ./HIDPI/backup/* ./<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span><span></span><span></span><span></span></span></code></pre>]]></content>
+      
+      
+      <categories>
+          
+          <category> 操作系统 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> 黑苹果 </tag>
+            
+            <tag> 系统优化 </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>git简单教程</title>
+      <link href="/git-jian-dan-jiao-cheng.html"/>
+      <url>/git-jian-dan-jiao-cheng.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><h3 id="下午刚学会，做个笔记-～￣▽￣-～"><a href="#下午刚学会，做个笔记-～￣▽￣-～" class="headerlink" title="下午刚学会，做个笔记(～￣▽￣)～"></a>下午刚学会，做个笔记(～￣▽￣)～</h3><h3 id="1-首先创建公钥"><a href="#1-首先创建公钥" class="headerlink" title="1.首先创建公钥"></a>1.首先创建公钥</h3><p>在终端执行</p><pre class="line-numbers language-bash"><code class="language-bash">ssh-keygen<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="2-粘贴公钥"><a href="#2-粘贴公钥" class="headerlink" title="2.粘贴公钥"></a>2.粘贴公钥</h3><p>将上一步生成的id_rsa.pub的内容复制并粘贴到自己的仓库中,以coding为例:<br><img src="key.png" alt=""></p><h3 id="3-初始化仓库"><a href="#3-初始化仓库" class="headerlink" title="3.初始化仓库"></a>3.初始化仓库</h3><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">git</span> init<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p><img src="init.png" alt=""></p><h3 id="4-设置远程仓库"><a href="#4-设置远程仓库" class="headerlink" title="4.设置远程仓库"></a>4.设置远程仓库</h3><p>设置远程仓库地址后再做push<br>此处<a href="mailto:git@e.coding.net">git@e.coding.net</a>:zdy/efi.git替换为自己的仓库地址</p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">git</span> remote add origin git@e.coding.net:zdy/efi.git<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="5-初始化并准备推送"><a href="#5-初始化并准备推送" class="headerlink" title="5.初始化并准备推送"></a>5.初始化并准备推送</h3><p>进入已经初始化好的或者克隆仓库的目录,然后执行：</p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">git</span> pull origin master<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p><img src="csh.png" alt=""></p><h3 id="6-提交修改"><a href="#6-提交修改" class="headerlink" title="6.提交修改"></a>6.提交修改</h3><p>修改/添加文件，原文件相比的更改<br>提交至暂存区</p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">git</span> add <span class="token keyword">.</span><span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>提交注释</p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">git</span> commit -m <span class="token string">"第一次提交"</span><span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p><img src="tj.png" alt=""><br>推送到远程主分支</p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">git</span> push origin master<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p><img src="tuisong.png" alt=""></p><h3 id="7-查看远程分支的文件"><a href="#7-查看远程分支的文件" class="headerlink" title="7.查看远程分支的文件"></a>7.查看远程分支的文件</h3><p>已经成功推送<br><img src="cangku.png" alt=""></p><h3 id="8-一些问题"><a href="#8-一些问题" class="headerlink" title="8.一些问题"></a>8.一些问题</h3><p>在新建仓库时，如果在仓库上已经存在 readme 或其他文件，在提交时可能会存在冲突，这时用户需要选择的是保留线上的文件或者舍弃线上的文件，如果您舍弃线上的文件，则在推送时选择强制推送，强制推送需要执行下面的命令(不推荐这样做)：</p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">git</span> push origin master -f<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>如果您选择保留线上的 readme 文件,则需要先执行：</p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">git</span> pull origin master<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>ok,打完收工</p>]]></content>
+      
+      
+      <categories>
+          
+          <category> web前端 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> git </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>终端命令自动补全</title>
+      <link href="/zhong-duan-ming-ling-zi-dong-bu-quan.html"/>
+      <url>/zhong-duan-ming-ling-zi-dong-bu-quan.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><h3 id="解决记不住（其实是懒）命令的烦恼"><a href="#解决记不住（其实是懒）命令的烦恼" class="headerlink" title="解决记不住（其实是懒）命令的烦恼"></a>解决记不住（其实是懒）命令的烦恼</h3><h3 id="1、下载插件"><a href="#1、下载插件" class="headerlink" title="1、下载插件"></a>1、下载插件</h3><pre class="line-numbers language-bash"><code class="language-bash">http://mimosa-pudica.net/src/incr-0.2.zsh<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="2、移动至oh-my-zsh的插件目录下"><a href="#2、移动至oh-my-zsh的插件目录下" class="headerlink" title="2、移动至oh-my-zsh的插件目录下"></a>2、移动至oh-my-zsh的插件目录下</h3><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">mkdir</span> .oh-my-zsh/plugins/incr <span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">mv</span> incr-0.2.zsh .oh-my-zsh/plugins/incr<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p><img src="cj.png" alt=""></p><h3 id="3、编辑配置文件"><a href="#3、编辑配置文件" class="headerlink" title="3、编辑配置文件"></a>3、编辑配置文件</h3><p>执行</p><pre class="line-numbers language-bash"><code class="language-bash">vim ~/.zshrc<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="4、添加命令"><a href="#4、添加命令" class="headerlink" title="4、添加命令"></a>4、添加命令</h3><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">source</span> ~/.oh-my-zsh/plugins/incr/incr*.zsh<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p><img src="tianjia.png" alt=""></p><h3 id="5、效果演示"><a href="#5、效果演示" class="headerlink" title="5、效果演示"></a>5、效果演示</h3><p><img src="xiaoguo.GIF" alt=""></p>]]></content>
+      
+      
+      <categories>
+          
+          <category> Android </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> Linux </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>Termux进阶使用</title>
+      <link href="/termux-jin-jie-shi-yong.html"/>
+      <url>/termux-jin-jie-shi-yong.html</url>
+      
+        <content type="html"><![CDATA[<h3 id="基础配置"><a href="#基础配置" class="headerlink" title="基础配置"></a>基础配置</h3><h3 id="1、键盘优化"><a href="#1、键盘优化" class="headerlink" title="1、键盘优化"></a>1、键盘优化</h3><p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">mkdir</span> <span class="token variable">$HOME</span>/.termux<span class="token keyword">echo</span> <span class="token string">"extra-keys = [['ESC','/','-','HOME','UP','END','PGUP'],['TAB','CTRL','ALT','LEFT','DOWN','RIGHT','PGDN']]"</span> <span class="token operator">>></span> <span class="token variable">$HOME</span>/.termux/termux.properties<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span></span></code></pre><h3 id="2、修改开头语"><a href="#2、修改开头语" class="headerlink" title="2、修改开头语"></a>2、修改开头语</h3><pre class="line-numbers language-bash"><code class="language-bash">vim <span class="token variable">$PREFIX</span>/etc/motd<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="3、修改官方源为清华大学源"><a href="#3、修改官方源为清华大学源" class="headerlink" title="3、修改官方源为清华大学源"></a>3、修改官方源为清华大学源</h3><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">vi</span> <span class="token variable">$PREFIX</span>/etc/apt/sources.list<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>将</p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token comment" spellcheck="true">#The main termux repository:</span>deb <span class="token punctuation">[</span>arch<span class="token operator">=</span>all,aarch64<span class="token punctuation">]</span> http://termux.net stable main<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span></span></code></pre><p>更改为   </p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token comment" spellcheck="true">#The main termux repository:</span><span class="token comment" spellcheck="true">#deb [arch=all,aarch64] http://termux.net stable main</span>deb <span class="token punctuation">[</span>arch<span class="token operator">=</span>all,aarch64<span class="token punctuation">]</span> http://mirrors.tuna.tsinghua.edu.cn/termux stable main<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span></span></code></pre><p>之后   </p><pre class="line-numbers language-bash"><code class="language-bash">pkg update<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="4、安装基本工具"><a href="#4、安装基本工具" class="headerlink" title="4、安装基本工具"></a>4、安装基本工具</h3><pre class="line-numbers language-bash"><code class="language-bash">pkg <span class="token function">install</span> vim curl <span class="token function">wget</span> <span class="token function">git</span> unzip <span class="token function">unrar</span><span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="5、安装ssh"><a href="#5、安装ssh" class="headerlink" title="5、安装ssh"></a>5、安装ssh</h3><pre class="line-numbers language-bash"><code class="language-bash">pkg <span class="token function">install</span> openssh<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>启动ssh服务   </p><pre class="line-numbers language-bash"><code class="language-bash">sshd<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>设置ssh服务自启动 </p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token keyword">echo</span> <span class="token string">"sshd"</span> <span class="token operator">>></span> ~/.bashrc<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>电脑端生成密钥，在终端输入</p><pre class="line-numbers language-bash"><code class="language-bash">ssh-keygen <span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>将生成的公钥（id_rsa.pub）复制到手机终端.ssh/目录下，然后执行 </p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">cat</span> id_rsa.pub <span class="token operator">></span> authorized_keys<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>接下来电脑终端输入ssh -p8022 手机ip地址，例：</p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">ssh</span> -p8022 192.168.1.184<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p><img src="ssh.png" alt=""></p><h3 id="6、美化终端，安装oh-my-zsh"><a href="#6、美化终端，安装oh-my-zsh" class="headerlink" title="6、美化终端，安装oh-my-zsh"></a>6、美化终端，安装oh-my-zsh</h3><p>1、首先申请存储权限</p><pre class="line-numbers language-bash"><code class="language-bash">termux-setup-storage<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>2、安装zsh</p><pre class="line-numbers language-bash"><code class="language-bash">pkg <span class="token function">install</span> zsh<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>3、安装oh-my-zsh<br>使用</p><pre class="line-numbers language-bash"><code class="language-bash">sh -c <span class="token string">"<span class="token variable"><span class="token variable">$(</span>curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh<span class="token variable">)</span></span>"</span><span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>或者</p><pre class="line-numbers language-bash"><code class="language-bash">sh -c <span class="token string">"<span class="token variable"><span class="token variable">$(</span><span class="token function">wget</span> https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh -O -<span class="token variable">)</span></span>"</span><span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p><img src="ohmyzsh.png" alt=""></p><h3 id="7、修改主题"><a href="#7、修改主题" class="headerlink" title="7、修改主题"></a>7、修改主题</h3><p>输入命令</p><pre class="line-numbers language-bash"><code class="language-bash">vim .zshrc<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>将ZSH_THEME中的值更改为主题名，这里我喜欢的主题是pygmalion,例：</p><pre class="line-numbers language-bash"><code class="language-bash">ZSH_THEME<span class="token operator">=</span><span class="token string">"pygmalion"</span><span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p><img src="zhuti.png" alt=""></p>]]></content>
+      
+      
+      <categories>
+          
+          <category> Android </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> Linux </tag>
+            
+            <tag> Termux </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>mac终端安装Homebrew</title>
+      <link href="/mac-zhong-duan-an-zhuang-brew.html"/>
+      <url>/mac-zhong-duan-an-zhuang-brew.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><h3 id="一键完成安装"><a href="#一键完成安装" class="headerlink" title="一键完成安装"></a>一键完成安装</h3><pre><code>/usr/bin/ruby https://rs.zdynb.cn/brew_install</code></pre><hr><p><strong>手动安装</strong></p><h3 id="1-首先下载安装脚本"><a href="#1-首先下载安装脚本" class="headerlink" title="1.首先下载安装脚本"></a>1.首先下载安装脚本</h3><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">cd</span> ~curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install <span class="token operator">>></span> brew_install<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span></span></code></pre><h3 id="2-编辑安装脚本"><a href="#2-编辑安装脚本" class="headerlink" title="2.编辑安装脚本"></a>2.编辑安装脚本</h3><p>将</p><pre class="line-numbers language-bash"><code class="language-bash">BREW_REPO <span class="token operator">=</span> <span class="token string">"https://github.com/Homebrew/brew"</span>.freeze<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>更改为</p><pre class="line-numbers language-bash"><code class="language-bash">BREW_REPO <span class="token operator">=</span> <span class="token string">"git://mirrors.ustc.edu.cn/brew.git"</span>.freeze<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>并添加</p><pre class="line-numbers language-bash"><code class="language-bash">CORE_TAP_REPO <span class="token operator">=</span> <span class="token string">"git://mirrors.ustc.edu.cn/homebrew-core.git"</span>.freeze<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>如图所示<br><img src="genggai.png" alt=""></p><h3 id="3-运行安装脚本"><a href="#3-运行安装脚本" class="headerlink" title="3.运行安装脚本"></a>3.运行安装脚本</h3><p>3.运行命令</p><pre class="line-numbers language-bash"><code class="language-bash">/usr/bin/ruby ~/brew_install<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="4-更改源"><a href="#4-更改源" class="headerlink" title="4.更改源"></a>4.更改源</h3><pre class="line-numbers language-bash"><code class="language-bash"><span class="token comment" spellcheck="true">#替换homebrew默认源</span><span class="token function">cd</span> <span class="token string">"<span class="token variable"><span class="token variable">$(</span>brew --repo<span class="token variable">)</span></span>"</span><span class="token function">git</span> remote set-url origin git://mirrors.ustc.edu.cn/brew.git<span class="token comment" spellcheck="true">#替换homebrew-core源</span><span class="token function">cd</span> <span class="token string">"<span class="token variable"><span class="token variable">$(</span>brew --repo<span class="token variable">)</span></span>/Library/Taps/homebrew/homebrew-core"</span><span class="token function">git</span> remote set-url origin git://mirrors.ustc.edu.cn/homebrew-core.git<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span><span></span><span></span><span></span></span></code></pre><h3 id="5-更新"><a href="#5-更新" class="headerlink" title="5.更新"></a>5.更新</h3><pre class="line-numbers language-bash"><code class="language-bash">brew update<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="6-添加配置"><a href="#6-添加配置" class="headerlink" title="6.添加配置"></a>6.添加配置</h3><pre class="line-numbers language-bash"><code class="language-bash"><span class="token keyword">echo</span> <span class="token string">'export HOMEBREW_BOTTLE_DOMAIN=https://mirrors.ustc.edu.cn/homebrew-bottles'</span> <span class="token operator">>></span> ~/.bash_profile<span class="token function">source</span> ~/.bash_profile<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span></span></code></pre><p><img src="brew.png" alt=""></p><h3 id="7-禁用homebrew自动更新"><a href="#7-禁用homebrew自动更新" class="headerlink" title="7.禁用homebrew自动更新"></a>7.禁用homebrew自动更新</h3><p>每次安装软件之前都会自动更新,等待时间较长,此处禁用更新</p><p><strong>Mac自带终端(bash)输入:</strong></p><pre><code>sudo vim ~/.bash_profile</code></pre><p>在最后一行添加</p><pre><code>export HOMEBREW_NO_AUTO_UPDATE=true</code></pre><p><strong>安装了zsh的输入:</strong></p><pre class="line-numbers language-zsh"><code class="language-zsh">sudo vim ~/.zshrc<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>最后一行添加</p><pre><code>export HOMEBREW_NO_AUTO_UPDATE=true</code></pre>]]></content>
+      
+      
+      <categories>
+          
+          <category> 操作系统 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> mac </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>科普下什么是竞价专员</title>
+      <link href="/jing-jie-zhuan-yuan-you-hua-fang-shi.html"/>
+      <url>/jing-jie-zhuan-yuan-you-hua-fang-shi.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><h3 id="什么是竞价专员"><a href="#什么是竞价专员" class="headerlink" title="什么是竞价专员"></a>什么是竞价专员</h3><p>1.毕业后第一份工作莫名其妙做了个竞价专员。一个多月了还一脸懵逼，面试了个web前端，却做了个竞价专员。。。。<br>2.是指负责在百度等网站上推广公司产品、获得排名的工作人员。<br>一般有：百度竞价员、谷歌竞价员、搜狗竞价员、有道竞价员等。<br>竞价主要是为企业花费广告费从网上带来客户或者直接营销，所以对竞价员的经验要求较高；<br>同时竞价入行门槛较高，没有一个企业会把一月几十万的广告费交给没有任何经验的人来管，新手入行一般就只会做做表、调价之类的，如果一个竞价手里消费出去100W以上广告费的话，算是基本入门了。所以竞价的待遇会比其他的行业高一些，同时企业一旦录用就会提供食宿。</p><h3 id="工作职责是："><a href="#工作职责是：" class="headerlink" title="工作职责是："></a>工作职责是：</h3><p>1、负责百度竞价账户的调价工作。<br>2、根据竞争对话情况，科学合理的分析关键词。<br>3、不断提高网络工作经验，把数据做细化，量化。<br>4、关键词的总结与分析。<br>5、统计每日的消费、流量，并优选关键词。</p><h3 id="提升的方向"><a href="#提升的方向" class="headerlink" title="提升的方向"></a>提升的方向</h3><p>1、月底看下往年数据，判断下每天所需预算，结合本月自己想要做出的调整，然后算出每月预算，向上级申请足额的预算。<br>2、判断本月重点项目是什么，然后对比商务通、流量统计、百度竞价数据，列出重点关键词，在预算允许的范围内，尽量靠前。<br>3、收集昨天的数据，然后做出自己的分析，一起打包发给主管。<br>4、根据主管要求，等对手调完价格以后，再开始调价。<br>5、打开重点词文件夹，每隔一小时或半小时进行检查。<br>6、关注流量统计后台，随时调整今日大流量词的排位。<br>……等等很多需要关注和分析,操作的事情,关键是主动意识.</p><h3 id="结论"><a href="#结论" class="headerlink" title="结论"></a>结论</h3><p>从上面的对比就可以看出来，机器人能做的事情，软件可以替代，聪明人做的事情，是无可替代的。现在做竞价的人，大部分都要面对预算不足的情况，而随着<br>百度凤巢的不断更新，这种情况只会愈演愈烈，如何充分运用预算，最大化账户效果，这是每个竞价都必须要考虑的问题，上级不会去关心什么质量度、什么上下线<br>时间，上级只看两个数，花多少钱，到多少人。而这两个数要好看，前面那些要求就都必须做好。</p><h3 id="最后，优化方式"><a href="#最后，优化方式" class="headerlink" title="最后，优化方式"></a>最后，优化方式</h3><p>ｂ（￣▽￣）ｄ😜<br>全国广泛999预算无上限，以一招破解敌人万千之变化，哈哈哈<br><img src="youhua.png" alt=""></p>]]></content>
+      
+      
+      <categories>
+          
+          <category> 学习日志 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> 学习 </tag>
+            
+            <tag> 新的征程 </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>手机终端神器Termux</title>
+      <link href="/shou-ji-zhong-duan-shen-qi-termux.html"/>
+      <url>/shou-ji-zhong-duan-shen-qi-termux.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><h3 id="终端是Linux的核心"><a href="#终端是Linux的核心" class="headerlink" title="终端是Linux的核心"></a>终端是Linux的核心</h3><p>1.我就不过多解释了，安卓手机也是基于Linux内核开发的，所以可以使用终端</p><h3 id="首先要下载安卓终端神器Termux"><a href="#首先要下载安卓终端神器Termux" class="headerlink" title="首先要下载安卓终端神器Termux"></a>首先要下载安卓终端神器Termux</h3><p>2.软件虽然只有200多kb，但是却有着强大的功能和无限成长的空间，并且还可以安装Linux发行版（ARM版的）。<br><img src="termux.jpg" alt=""><br>3.安装完成之后第一步先更新源</p><pre class="line-numbers language-bash"><code class="language-bash">pkg update<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="使用zsh来代替bush作为默认shell"><a href="#使用zsh来代替bush作为默认shell" class="headerlink" title="使用zsh来代替bush作为默认shell"></a>使用zsh来代替bush作为默认shell</h3><p>4.安装之前首先安装curl</p><pre class="line-numbers language-bash"><code class="language-bash">pkg <span class="token function">install</span> curl<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="安装zsh"><a href="#安装zsh" class="headerlink" title="安装zsh"></a>安装zsh</h3><p>5.安装zsh（oh my zsh可以自定义终端样式）</p><pre class="line-numbers language-bash"><code class="language-bash">sh -c <span class="token string">"<span class="token variable"><span class="token variable">$(</span>curl -fsSL https://github.com/Cabbagec/termux-ohmyzsh/raw/master/install.sh<span class="token variable">)</span></span>"</span><span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>执行完这条命令之后第一个选项选择背景样式，第二个选择字体样式</p><h3 id="外置存储访问"><a href="#外置存储访问" class="headerlink" title="外置存储访问"></a>外置存储访问</h3><pre class="line-numbers language-bash"><code class="language-bash">termux-setup-storage<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>授权之后便会在home目录下生成storage目录（即存储卡）<br>创建QQ文件夹软连接</p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">ln</span> -s /data/data/com.termux/files/home/storage/shared/tencent/QQfile_recv QQ<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="配置oh-my-zsh主题"><a href="#配置oh-my-zsh主题" class="headerlink" title="配置oh my zsh主题"></a>配置oh my zsh主题</h3><pre class="line-numbers language-bash"><code class="language-bash">vim .zshrc<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>第一行后面的引号里面就是主题名称,这里我喜欢这主题有YS、pygmalion<br><img src="zsh.jpg" alt=""></p><h3 id="修改启动问候语"><a href="#修改启动问候语" class="headerlink" title="修改启动问候语"></a>修改启动问候语</h3><pre class="line-numbers language-bash"><code class="language-bash">vim <span class="token variable">$PREFIX</span>/etc/motd<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="管理员身份即root"><a href="#管理员身份即root" class="headerlink" title="管理员身份即root"></a>管理员身份即root</h3><p>分两种，有root的手机和虚拟root<br>第一种有root的手机，执行</p><pre class="line-numbers language-bash"><code class="language-bash">pkg <span class="token function">install</span> tsu<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>启动命令tsu<br>第二种，虚拟root</p><pre class="line-numbers language-bash"><code class="language-bash">pkg <span class="token function">install</span> proot<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>启动命令termux-chroot</p><h3 id="安装vim编辑器及其发行版"><a href="#安装vim编辑器及其发行版" class="headerlink" title="安装vim编辑器及其发行版"></a>安装vim编辑器及其发行版</h3><pre class="line-numbers language-bash"><code class="language-bash">pkg <span class="token function">install</span> vim curl -sLf https://spacevim.org/cn/install.sh <span class="token operator">|</span> <span class="token function">bash</span><span aria-hidden="true" class="line-numbers-rows"><span></span><span></span></span></code></pre><p>发行版的spacevim功能比原版功能更加人性化</p><h3 id="更改SpaceVim主题"><a href="#更改SpaceVim主题" class="headerlink" title="更改SpaceVim主题"></a>更改SpaceVim主题</h3><pre class="line-numbers language-bash"><code class="language-bash">vim ~/.SpaceVim.d/init.toml<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p><img src="svm.jpg" alt=""></p><h3 id="termux连接电脑-amp-远程服务器"><a href="#termux连接电脑-amp-远程服务器" class="headerlink" title="termux连接电脑&amp;远程服务器"></a>termux连接电脑&amp;远程服务器</h3><p>首先安装ssh</p><pre class="line-numbers language-bash"><code class="language-bash">pkg <span class="token function">install</span> openssh<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>连接命令为 ssh 用户名@电脑IP地址<br><img src="ssh.jpg" alt=""></p><h3 id="电脑连接termux"><a href="#电脑连接termux" class="headerlink" title="电脑连接termux"></a>电脑连接termux</h3><p>电脑连接就可以使用键盘敲了,手机那蛋疼的键盘和输入法….<br>首先电脑生成连接公钥(手机不支持密码连接)</p><pre class="line-numbers language-bash"><code class="language-bash">ssh-keygen<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>执行后生成三个文件,id_rsa, id_rsa.pub , known_hosts<br>将id_rsa.pub复制到data\data\com.termux\files\home.ssh文件夹中,然后手机执行如下命令将公钥信息注入</p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">cat</span> id_rsa.pub <span class="token operator">></span> authorized_keys<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>然后使用电脑终端连接</p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">ssh</span> 手机用户名@手机IP地址 -p8022<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p><img src="lj.png" alt=""><br>还有一些有意思的东西后面在写…</p>]]></content>
+      
+      
+      <categories>
+          
+          <category> Android </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> Linux </tag>
+            
+            <tag> Termux </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>实习前的聚餐</title>
+      <link href="/bi-ye-qian-zui-hou-yi-ci-ju-can.html"/>
+      <url>/bi-ye-qian-zui-hou-yi-ci-ju-can.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i><br><em>马上就要毕业了,时间还是过得很快呀!</em><br><em>这是最后一次聚会啦!发点照片纪念一下.</em><br><img src="a1.jpg" alt=""><br><img src="a2.jpg" alt=""><br><img src="a3.jpg" alt=""><br><img src="a4.jpg" alt=""><br><img src="a5.jpg" alt=""><br><img src="a6.jpg" alt=""><br><img src="a7.jpg" alt=""><br><img src="a8.jpg" alt=""></p>]]></content>
+      
+      
+      <categories>
+          
+          <category> 回忆 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> 学校 </tag>
+            
+            <tag> 聚会 </tag>
+            
+            <tag> 回忆 </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>微信&amp;QQ自动抢红包</title>
+      <link href="/wei-xin-qq-zi-dong-qiang-hong-bao.html"/>
+      <url>/wei-xin-qq-zi-dong-qiang-hong-bao.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><h3 id="PS：安装这个有几率让手机无法开机。没有刷机经验的最好选择无root方案"><a href="#PS：安装这个有几率让手机无法开机。没有刷机经验的最好选择无root方案" class="headerlink" title="PS：安装这个有几率让手机无法开机。没有刷机经验的最好选择无root方案"></a>PS：安装这个有几率让手机无法开机。没有刷机经验的最好选择无root方案</h3><h4 id="首先是root方案"><a href="#首先是root方案" class="headerlink" title="首先是root方案"></a>首先是root方案</h4><p>1.Android9.0以下安装xposed框架，9.0安装太极或者edxposed<br><img src="xposed.jpg" alt=""><br>2.安卓9.0以下打开xposed框架并root授予的授予框架权限进行安装，太极的话分两种方式，没有root和有root的方式<br>3.由于我是安卓9.0，所以就不过多赘述之前的版本，原理基本一样。有root的方式：使用magisk刷入太极模块如图所示<br><img src="magisk.jpg" alt=""><br>4.刷入完成后重启手机让模块生效，如果能够开机说明已经成功了70%。如果开机无法进入系统请使用ADB命令删除data/ADB/目录下的modules，然后重启，使用无root方案<br>5.在上一步成功的基础上就可以刷入各种插件了，QQ和微信的红包插件分别是qx模块和wx模块<br><img src="module.jpg" alt=""><br>6.激活之后将需要的应用添加进要hook的列表<br><img src="app.jpg" alt=""><br>7.添加完成之后将程序强制停止并重启应用<br><img src="stop.jpg" alt=""><br>8.重新启动之后，QQ的设置界面会多出一个选项，微信同理<br><img src="qq.jpg" alt=""><br><img src="wechat.jpg" alt=""><br>9.打开红包的自动领取开关就大功告成了<br><img src="hb.jpg" alt=""><br><img src="hb2.jpg" alt=""></p><h4 id="无root方案（这种方式简单但是稳定性较差，需要保持太极后台运行，否则便会报错）"><a href="#无root方案（这种方式简单但是稳定性较差，需要保持太极后台运行，否则便会报错）" class="headerlink" title="无root方案（这种方式简单但是稳定性较差，需要保持太极后台运行，否则便会报错）"></a>无root方案（这种方式简单但是稳定性较差，需要保持太极后台运行，否则便会报错）</h4><p>1.首先使用太极创建一个应用，并且卸载掉原来的应用；这里可能会报告应用安装不安全，因为应用包被修改过所以签名变了，校验会有警告，继续安装即可<br>2.安装完成之后需要添加应用并点击右侧选择优化,这里需要几分钟时间<br><img src="yh.jpg" alt=""><br>3.添加qx模块/wx模块，和上面的添加方法一样不再过多赘述<br>4.强制停止应用并重启应用<br>5.激活模块之后打开红包的开关即可</p>]]></content>
+      
+      
+      <categories>
+          
+          <category> Android </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> Android </tag>
+            
+            <tag> xposed </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>黑苹果的安装</title>
+      <link href="/hei-ping-guo-de-an-zhuang.html"/>
+      <url>/hei-ping-guo-de-an-zhuang.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i><br><em>在非苹果电脑上安装苹果系统（即macOS）</em><br><em>安装此操作系统难度较高，没有Windows系统重装经验的尽量不要尝试</em></p><h3 id="1-下载镜像"><a href="#1-下载镜像" class="headerlink" title="1.下载镜像"></a>1.下载镜像</h3><p>首先是去下载macOS镜像（远景论坛或者黑果小兵的部落阁），包含clover的镜像<br><img src="iso.png" alt=""></p><h3 id="2-调整分区"><a href="#2-调整分区" class="headerlink" title="2.调整分区"></a>2.调整分区</h3><p>首先将EFI分区调整到500mb（最小300mb）大小，找到适合自己机型的EFI引导文件</p><h3 id="3-刻录镜像"><a href="#3-刻录镜像" class="headerlink" title="3.刻录镜像"></a>3.刻录镜像</h3><p>将下载的镜像使用transmac（Windows端）或etcher刻录到U盘（大于8g）<br><img src="etcher.png" alt=""></p><h3 id="4-设置首选启动"><a href="#4-设置首选启动" class="headerlink" title="4.设置首选启动"></a>4.设置首选启动</h3><p>开机按f12进入BIOS，将U盘设置为首选启动项</p><h3 id="5-加载clover"><a href="#5-加载clover" class="headerlink" title="5.加载clover"></a>5.加载clover</h3><p>进入clover引导界面开始加载<br><img src="1.png" alt=""></p><h3 id="6-等待几分钟进入如下界面"><a href="#6-等待几分钟进入如下界面" class="headerlink" title="6.等待几分钟进入如下界面"></a>6.等待几分钟进入如下界面</h3><p><img src="3.png" alt=""></p><h3 id="7-选择安装磁盘"><a href="#7-选择安装磁盘" class="headerlink" title="7.选择安装磁盘"></a>7.选择安装磁盘</h3><p>接着就是下一步下一部然后到选择安装磁盘<br><img src="8.png" alt=""></p><h3 id="8-抹盘"><a href="#8-抹盘" class="headerlink" title="8.抹盘"></a>8.抹盘</h3><p>这里选择磁盘工具对要安装的磁盘进行抹掉<br><img src="10.png" alt=""></p><h3 id="9-抹掉完成之后如下"><a href="#9-抹掉完成之后如下" class="headerlink" title="9.抹掉完成之后如下"></a>9.抹掉完成之后如下</h3><p><img src="15.png" alt=""></p><h3 id="10-安装"><a href="#10-安装" class="headerlink" title="10.安装"></a>10.安装</h3><p>抹掉磁盘后返回之前的选择界面进行安装<br><img src="17.png" alt=""></p><h3 id="11-安装界面"><a href="#11-安装界面" class="headerlink" title="11.安装界面"></a>11.安装界面</h3><p>期间会重启几次<br><img src="18.png" alt=""></p><h3 id="12-如图"><a href="#12-如图" class="headerlink" title="12.如图"></a>12.如图</h3><p><img src="19.png" alt=""></p><h3 id="13-安装完成进行向导设置"><a href="#13-安装完成进行向导设置" class="headerlink" title="13.安装完成进行向导设置"></a>13.安装完成进行向导设置</h3><p><img src="22.png" alt=""></p><h3 id="14-创建用户"><a href="#14-创建用户" class="headerlink" title="14.创建用户"></a>14.创建用户</h3><p>接下来就是一系列的设置和创建用户<br><img src="30.png" alt=""></p><h3 id="15-进入桌面"><a href="#15-进入桌面" class="headerlink" title="15.进入桌面"></a>15.进入桌面</h3><p><img src="36.png" alt=""></p><h3 id="16-完成"><a href="#16-完成" class="headerlink" title="16.完成"></a>16.完成</h3><p>安装完系统只是第一步，后续驱动问题才是最难的地方后续会接着补充。<br><img src="desktop.png" alt=""></p>]]></content>
+      
+      
+      <categories>
+          
+          <category> 操作系统 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> 计算机 </tag>
+            
+            <tag> 操作系统 </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>将hexo博客部署到云服务器</title>
+      <link href="/jiang-hexo-bo-ke-bu-shu-dao-yun-fu-wu-qi.html"/>
+      <url>/jiang-hexo-bo-ke-bu-shu-dao-yun-fu-wu-qi.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><h4 id="解决速度过慢"><a href="#解决速度过慢" class="headerlink" title="解决速度过慢"></a>解决速度过慢</h4><p>由于GitHub服务器没有在国内，而hexo博客部署是默认在GitHub上，访问速度特别慢，一个小网页也要加载很久，这时候我便想能不能放在自己的云服务器上，查阅了很多资料后便发现这种想法是可以的。<br>首先，需要一台云服务器和一个已经备案的域名（没有备案的直接用公网IP进行访问），我的服务器是centos7的，第一步就是配置ssh公钥登陆（避免每次更新文章都要输入密码）。</p><h4 id="1-安装git和nginx"><a href="#1-安装git和nginx" class="headerlink" title="1.安装git和nginx"></a>1.安装git和nginx</h4><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">apt-get</span> update<span class="token function">apt-get</span> <span class="token function">install</span> git-core nginx<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span></span></code></pre><h4 id="2-配置nginx-用于存放生成的静态文件"><a href="#2-配置nginx-用于存放生成的静态文件" class="headerlink" title="2.配置nginx,用于存放生成的静态文件"></a>2.配置nginx,用于存放生成的静态文件</h4><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">mkdir</span> /www/wwwroot/blog<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h4 id="3-配置Git-Hooks"><a href="#3-配置Git-Hooks" class="headerlink" title="3.配置Git Hooks"></a>3.配置Git Hooks</h4><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">mkdir</span> ~/blog.git <span class="token operator">&amp;&amp;</span> <span class="token function">cd</span> ~/blog.git<span class="token function">git</span> init --bare<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span></span></code></pre><h4 id="4-配置hooks脚本-post-recevive脚本将在blog-git仓库收到push时执行。"><a href="#4-配置hooks脚本-post-recevive脚本将在blog-git仓库收到push时执行。" class="headerlink" title="4.配置hooks脚本,post-recevive脚本将在blog.git仓库收到push时执行。"></a>4.配置hooks脚本,post-recevive脚本将在blog.git仓库收到push时执行。</h4><pre class="line-numbers language-bash"><code class="language-bash">vim ./hooks/post-receive<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>脚本的原理，删除原有的 /www/wwwroot/blog目录，然后从blog.git克隆新的博客静态文件</p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token shebang important">#!/bin/bash</span><span class="token function">rm</span> -rf /www/wwwroot/blog<span class="token function">git</span> clone /root/blog.git /www/wwwroot/blog<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span></span></code></pre><p>给post-receive脚本执行权限</p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">chmod</span> +x ./hooks/post-receive<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h4 id="5-部署hexo博客"><a href="#5-部署hexo博客" class="headerlink" title="5.部署hexo博客"></a>5.部署hexo博客</h4><p>修改_config.yml</p><pre class="line-numbers language-bash"><code class="language-bash">deploy:   type:git   repo:root@192.168.1.1:blog.git<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span></span></code></pre><h4 id="6-部署博客"><a href="#6-部署博客" class="headerlink" title="6.部署博客"></a>6.部署博客</h4><p>hexo成新的博客静态文件，然后通过Git将其同步到云服务器的blog.git仓库</p><pre class="line-numbers language-bash"><code class="language-bash">hexo clean <span class="token operator">&amp;&amp;</span> hexo g <span class="token operator">&amp;&amp;</span> hexo d<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>然后通过自己的域名即可访问。</p>]]></content>
+      
+      
+      <categories>
+          
+          <category> Linux </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> Linux </tag>
+            
+            <tag> hexo </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>初试微信小程序开发</title>
+      <link href="/chu-shi-wei-xin-xiao-cheng-xu-kai-fa.html"/>
+      <url>/chu-shi-wei-xin-xiao-cheng-xu-kai-fa.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><h3 id="第一次尝试微信小程序"><a href="#第一次尝试微信小程序" class="headerlink" title="第一次尝试微信小程序"></a>第一次尝试微信小程序</h3><h3 id="基本操作"><a href="#基本操作" class="headerlink" title="基本操作"></a>基本操作</h3><p>和HTML5是差不多的代码和语法，只有部分不一样</p><ol><li>使用专门的开发工具，会默认创建一个js,json,wxml,wxss,<br><img src="2.png" alt=""></li><li>和HTML5略为不同的地方就是一些基础标签，如html和div标签<br><img src="3.png" alt=""></li><li>小程序前端比较简单，但是在后台的调用数据库略为困难<br><img src="1.png" alt=""></li></ol>]]></content>
+      
+      
+      <categories>
+          
+          <category> web前端 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> Linux </tag>
+            
+            <tag> web前端 </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>mac终端快捷键</title>
+      <link href="/mac-zhong-duan-kuai-jie-jian.html"/>
+      <url>/mac-zhong-duan-kuai-jie-jian.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i><br>记一个笔记</p><pre><code>Ctrl+a 移动到当前行的开头Ctrl+b 光标向后移动一个字符,相当与&lt;-Ctrl+c 删除整行Ctrl+d 删除光标所在处字符Ctrl+e 移动到当前行的结尾Ctrl+f 光标向前移动一个字符,相当与-&gt;Ctrl+h 删除光标所在处前一个字符Ctrl+k 剪切命令行中光标所在处之后的所有字符（包括自身）Ctrl+l 清屏Ctrl+q 重新启用挂起的shellCtrl+r 然后输入若干字符，开始向上搜索包含该字符的命令，继续按Ctrl+r，搜索上一条匹配的命令Ctrl+s 挂起当前shellCtrl+s 与Ctrl+r类似,只是正向检索Ctrl+t 颠倒光标所在处及其之前的字符位置，并将光标移动到下一个字符Ctrl+u 剪切命令行中光标所在处之前的所有字符（不包括自身）Ctrl+v 插入特殊字符,如Ctrl+v+Tab加入Tab字符键Ctrl+w 剪切光标所在处之前的一个词（以空格、标点等为分隔符）Ctrl+y 粘贴刚才所删除的字符Ctrl+(x u) 按住Ctrl的同时再先后按x和u，撤销刚才的操作↑(Ctrl+p) 显示上一条命令↑(Ctrl+p) 显示上一条命令↓(Ctrl+n) 显示下一条命令↓(Ctrl+n) 显示下一条命令clear 清除 shell 提示屏幕[Tab] =命令行自动补全Esc+b 移动到当前单词的开头Esc+f 移动到当前单词的结尾Esc+t 颠倒光标所在处及其相邻单词的位置exit 注销history 显示命令历史history 显示命令历史列表ls !$ 执行命令ls，并以上一条命令的参数为其参数opt+&lt;\- 光标向前移动一个单词opt+-&gt; 光标向后移动一个单词reset 刷新 shell 提示屏幕</code></pre>]]></content>
+      
+      
+      <categories>
+          
+          <category> 操作系统 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> mac </tag>
+            
+            <tag> terminal </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>markdown语法</title>
+      <link href="/markdown-xie-zuo-yu-fa.html"/>
+      <url>/markdown-xie-zuo-yu-fa.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><h3 id="标题"><a href="#标题" class="headerlink" title="标题"></a>标题</h3><p>几个#号就是几级标题</p><pre><code># 一级标题## 二级标题### 三级标题#### 四级标题##### 五级标题###### 六级标题</code></pre><h3 id="无序列表"><a href="#无序列表" class="headerlink" title="无序列表"></a>无序列表</h3><pre><code>- 段落1- 段落2- 段落3</code></pre><ul><li>段落1</li><li>段落2</li><li>段落3</li></ul><h3 id="有序列表"><a href="#有序列表" class="headerlink" title="有序列表"></a>有序列表</h3><pre><code>1.段落12.段落23.段落3</code></pre><p>1.段落1<br>2.段落2<br>3.段落3</p><h3 id="超链接"><a href="#超链接" class="headerlink" title="超链接"></a>超链接</h3><pre><code>[张登友的博客](www.zdynb.cn)</code></pre><p><a href="www.zdynb.cn">张登友的博客</a></p><h3 id="图片"><a href="#图片" class="headerlink" title="图片"></a>图片</h3><pre><code>![](1.jpg)</code></pre><p><img src="markdown.png" alt=""></p><h3 id="代码"><a href="#代码" class="headerlink" title="代码"></a>代码</h3><pre class="line-numbers language-ruby"><code class="language-ruby"><span class="token keyword">require</span> <span class="token string">'redcarpet'</span>markdown <span class="token operator">=</span> <span class="token constant">Redcarpet</span><span class="token punctuation">.</span><span class="token keyword">new</span><span class="token punctuation">(</span><span class="token string">"Hello World!"</span><span class="token punctuation">)</span>puts markdown<span class="token punctuation">.</span>to_html<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span></span></code></pre><h3 id="强调"><a href="#强调" class="headerlink" title="强调"></a>强调</h3><p>在Markdown中，可以使用 * 和  _  来表示斜体和加粗。</p><pre><code>*面对疾风吧*_面对疾风吧_</code></pre><p><em>面对疾风吧</em><br><em>面对疾风吧</em></p><h3 id="加粗"><a href="#加粗" class="headerlink" title="加粗"></a>加粗</h3><pre><code>**面对疾风吧**__面对疾风吧__</code></pre><p><strong>面对疾风吧</strong><br><strong>面对疾风吧</strong></p><h3 id="表格"><a href="#表格" class="headerlink" title="表格"></a>表格</h3><pre><code>第一格 | 第二格  | 第三格----- | -----  | ------第四格 | 第五格   | 第六格第七格 | 第八格   | 第九格</code></pre><table><thead><tr><th>第一格</th><th>第二格</th><th>第三格</th></tr></thead><tbody><tr><td>第四格</td><td>第五格</td><td>第六格</td></tr><tr><td>第七格</td><td>第八格</td><td>第九格</td></tr><tr><td>### 分割线</td><td></td><td></td></tr></tbody></table><pre><code>这是分隔线上部分内容------这是分隔线上部分内容</code></pre><p>这是分隔线上部分内容</p><hr><p>这是分隔线下部分内容</p><ol><li>引用，在文字前面加上&gt;</li></ol><pre><code>&gt; 来干来干</code></pre><blockquote><p>来干来干</p></blockquote><h3 id="转义字符"><a href="#转义字符" class="headerlink" title="转义字符"></a>转义字符</h3><pre><code>\ \ 反斜杠\ ` 反引号\ * 星号\ _ 下划线\ {} 大括号\ [] 中括号\ () 小括号\ # 井号\ + 加号\ - 减号\ . 英文句号\ ! 感叹号</code></pre><p>\<br>`<br>*<br>_<br>{}<br>[]<br>()<br>#<br>+<br>-<br>.<br>!</p>]]></content>
+      
+      
+      <categories>
+          
+          <category> web前端 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> Linux </tag>
+            
+            <tag> hexo </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>命令行下载百度云</title>
+      <link href="/ming-ling-xing-xia-zai-bai-du-yun.html"/>
+      <url>/ming-ling-xing-xia-zai-bai-du-yun.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><h3 id="百度云命令行下载"><a href="#百度云命令行下载" class="headerlink" title="百度云命令行下载"></a>百度云命令行下载</h3><h3 id="需求："><a href="#需求：" class="headerlink" title="需求："></a>需求：</h3><ul><li>一个能运行终端的设备（安卓机安装termux,mac和Linux直接打开终端，windws直接下载对应的版本就打开）</li><li>电脑可以略过2-5条，11条</li><li>有一定的Linux基础</li><li>手机安装百度云</li><li><a href="https://github.com/iikira/BaiduPCS-Go" target="_blank" rel="noopener">BaiduPCS-Go官方开源地址</a></li></ul><h3 id="1-下载"><a href="#1-下载" class="headerlink" title="1. 下载"></a>1. 下载</h3><p>电脑直接去开源地址下载，安卓手机先下载termux并安装<br>电脑端下载完成后打开<br><img src="dn.png" alt=""></p><h3 id="手机端看这里"><a href="#手机端看这里" class="headerlink" title="手机端看这里"></a>手机端看这里</h3><h3 id="添加权限"><a href="#添加权限" class="headerlink" title="添加权限"></a>添加权限</h3><h3 id="2-授予权限"><a href="#2-授予权限" class="headerlink" title="2. 授予权限"></a>2. 授予权限</h3><p>安卓机要先授予存储权限，也就是执行这条 (termux-setup-storage)</p><h3 id="添加安装源"><a href="#添加安装源" class="headerlink" title="添加安装源"></a>添加安装源</h3><h3 id="3-执行命令"><a href="#3-执行命令" class="headerlink" title="3. 执行命令"></a>3. 执行命令</h3><p>（安卓机执行）添加软件源输入： </p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token keyword">echo</span> <span class="token string">"deb [trusted=yes] http://termux.iikira.com stable main"</span> <span class="token operator">>></span> /data/data/com.termux/files/usr/etc/apt/sources.list<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="4-更新软件源"><a href="#4-更新软件源" class="headerlink" title="4. 更新软件源"></a>4. 更新软件源</h3><p>也就是执行:</p><pre class="line-numbers language-bash"><code class="language-bash">apt update<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>或者</p><pre class="line-numbers language-bash"><code class="language-bash">pkg update<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="5-安装baidupcs-go"><a href="#5-安装baidupcs-go" class="headerlink" title="5. 安装baidupcs-go"></a>5. 安装baidupcs-go</h3><p>执行</p><pre class="line-numbers language-bash"><code class="language-bash">apt <span class="token function">install</span> baidupcs-go<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="这里开始电脑和手机基本过程大同小异"><a href="#这里开始电脑和手机基本过程大同小异" class="headerlink" title="这里开始电脑和手机基本过程大同小异"></a>这里开始电脑和手机基本过程大同小异</h3><h3 id="6-运行-BaiduPCS-Go"><a href="#6-运行-BaiduPCS-Go" class="headerlink" title="6. 运行(BaiduPCS-Go)"></a>6. 运行(BaiduPCS-Go)</h3><p><img src="login.jpg" alt=""></p><h3 id="7-登陆"><a href="#7-登陆" class="headerlink" title="7. 登陆"></a>7. 登陆</h3><p>输入login，回车</p><h3 id="8-登陆账号"><a href="#8-登陆账号" class="headerlink" title="8. 登陆账号"></a>8. 登陆账号</h3><p>按要求输入账号然后回车，然后输入密码，PS：输入的时候密码是不显示的，不要认为是手机坏了</p><h3 id="9-验证码"><a href="#9-验证码" class="headerlink" title="9. 验证码"></a>9. 验证码</h3><p>验证如果要验证码就长按复制验证码图片链接，然后粘贴到浏览器打开，如果失败就重新来一次，当然如果使用短信验证码更简单<br><img src="login2.jpg" alt=""></p><h3 id="10-生成下载文件夹"><a href="#10-生成下载文件夹" class="headerlink" title="10. 生成下载文件夹"></a>10. 生成下载文件夹</h3><p>登陆成功之后，配置一下appid,执行</p><pre class="line-numbers language-bash"><code class="language-bash">config <span class="token keyword">set</span> --appid 265486<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="11-设置保存位置"><a href="#11-设置保存位置" class="headerlink" title="11. 设置保存位置"></a>11. 设置保存位置</h3><p>设置下载文件保存的位置，例如存到手机内存的下载文件夹下(config set –savedir ‘/sdcard/下载’)，下载完就可以直接在这里找到</p><h3 id="12-设置下载的线程数"><a href="#12-设置下载的线程数" class="headerlink" title="12. 设置下载的线程数"></a>12. 设置下载的线程数</h3><p>默认100，线程越大下载数越快，当然也越大的几率被百度拉黑，范围在50到500之间</p><pre class="line-numbers language-bash"><code class="language-bash">config <span class="token keyword">set</span> --max_parallel 300<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="13-设置下载的数量"><a href="#13-设置下载的数量" class="headerlink" title="13. 设置下载的数量"></a>13. 设置下载的数量</h3><p>数字就是同时下载的数量</p><pre class="line-numbers language-bash"><code class="language-bash">config <span class="token keyword">set</span> --max_download_load 3<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="14-粘贴网址"><a href="#14-粘贴网址" class="headerlink" title="14. 粘贴网址"></a>14. 粘贴网址</h3><p>上面做完之后，把termux关闭，点状态栏那个exit按钮，然后进入浏览器，打开百度云官网 <a href="http://pan.baidu.com" target="_blank" rel="noopener">http://pan.baidu.com</a> 登录百度云，登完后再复制下面这个网址，粘贴到刚刚登完账号的浏览器并访问。 <a href="http://pcs.baidu.com/rest/2.0/pcs/file?app_id=265486&amp;method=list&amp;path=%2F" target="_blank" rel="noopener">http://pcs.baidu.com/rest/2.0/pcs/file?app_id=265486&amp;method=list&amp;path=%2F</a></p><h3 id="15-生成的文件夹"><a href="#15-生成的文件夹" class="headerlink" title="15. 生成的文件夹"></a>15. 生成的文件夹</h3><p>文件夹访问会出现一串看不懂的东西，然后打开手机百度云，不出意外你的百度云的 /我的应用数据 下面多出了个 baidu_shurufa文件夹（没有就创建一个）。如图：</p><h3 id="16-下载方式"><a href="#16-下载方式" class="headerlink" title="16. 下载方式"></a>16. 下载方式</h3><p>在百度云APP里把想要下载的文件放到 /我的应用数据/baidu_shurufa 里面<br>，例如我想下载爱奇艺 v9.9.8 Play无广告版<br><img src="xz.jpg" alt=""></p><h3 id="17-重启termux"><a href="#17-重启termux" class="headerlink" title="17. 重启termux"></a>17. 重启termux</h3><p>接下来就是正题了，准备工作完成了，此时打开termux，重新启动 BaiduPCS-Go，执行(BaiduPCS-Go)</p><h3 id="18-切换文件夹"><a href="#18-切换文件夹" class="headerlink" title="18. 切换文件夹"></a>18. 切换文件夹</h3><p>首先切换到要下载文件夹下执行 </p><pre class="line-numbers language-bash"><code class="language-bash"><span class="token function">cd</span> /apps/baidu_shurufa<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><h3 id="19-下载方式"><a href="#19-下载方式" class="headerlink" title="19. 下载方式"></a>19. 下载方式</h3><p>我要下载的文件叫爱奇艺 v9.9.8 Play无广告版，那么久输入： d &nbsp;’爱奇艺 v9.9.8 Play无广告版.apk’，注意d后面还有空格，还有文件的后缀名，回车久OK了<br><img src="xz3.jpg" alt=""></p><h3 id="20-下载详情"><a href="#20-下载详情" class="headerlink" title="20. 下载详情"></a>20. 下载详情</h3><p>下载速度已经达到宽带的最大速度，有问题可以点击首页的QQ问我</p>]]></content>
+      
+      
+      <categories>
+          
+          <category> Linux </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> Linux </tag>
+            
+            <tag> hexo </tag>
+            
+            <tag> Termux </tag>
+            
+            <tag> Unix </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>配置音乐插件</title>
+      <link href="/pei-zhi-yin-le-cha-jian.html"/>
+      <url>/pei-zhi-yin-le-cha-jian.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><h2 id="启用插件"><a href="#启用插件" class="headerlink" title="启用插件"></a>启用插件</h2><h3 id="1-启用插件"><a href="#1-启用插件" class="headerlink" title="1. 启用插件"></a>1. 启用插件</h3><p>将enable的值改为true即可激活音乐插件。<br><img src="0.png" alt=""></p><h3 id="2-找链接"><a href="#2-找链接" class="headerlink" title="2. 找链接"></a>2. 找链接</h3><p>然后是找音乐的播放链接,在线音乐地址解析。<br><img src="1.png" alt=""></p><h3 id="3-专辑封面，"><a href="#3-专辑封面，" class="headerlink" title="3. 专辑封面，"></a>3. 专辑封面，</h3><p>可以从网易云的源码里找<br><img src="2.png" alt=""></p><h3 id="4-填写地址，"><a href="#4-填写地址，" class="headerlink" title="4. 填写地址，"></a>4. 填写地址，</h3><p>之前多打了一个逗号，一直报错，找了好久(～﹃～)~zZ<br><img src="3.png" alt=""></p><h3 id="5-完成的效果"><a href="#5-完成的效果" class="headerlink" title="5. 完成的效果"></a>5. 完成的效果</h3><p><img src="4.png" alt=""></p><h3 id="注意事项"><a href="#注意事项" class="headerlink" title="注意事项"></a>注意事项</h3><p>坑爹的网易云和QQ音乐，我才吃个饭所有的外链播放全部失效，回来一看音乐一个都放不了了，以为代码出错了，一个一个排查，结果没错，找了半天是网易云的在线音乐有个失效机制，害的我又重做，全部换成自己的服务器凸(艹皿艹)</p>]]></content>
+      
+      
+      <categories>
+          
+          <category> web前端 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> Linux </tag>
+            
+            <tag> web前端 </tag>
+            
+            <tag> 音乐 </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>部署过程</title>
+      <link href="/bu-shu-guo-cheng.html"/>
+      <url>/bu-shu-guo-cheng.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><h2 id="使用mac终端部署（Linux同理）"><a href="#使用mac终端部署（Linux同理）" class="headerlink" title="使用mac终端部署（Linux同理）"></a>使用mac终端部署（Linux同理）</h2><h3 id="1-第一步"><a href="#1-第一步" class="headerlink" title="1. 第一步"></a>1. 第一步</h3><p>当然是使用shell将hexo部署到本地，各种详细过程暂时不详细描述，有时间再写一个详细的教程<br><img src="1.jpg" alt=""><br><img src="2.jpg" alt=""></p><h3 id="2-配置音乐"><a href="#2-配置音乐" class="headerlink" title="2. 配置音乐"></a>2. 配置音乐</h3><p><img src="3.png" alt=""><br><img src="5.png" alt=""></p><h3 id="3-用PS搞个头像，哈哈"><a href="#3-用PS搞个头像，哈哈" class="headerlink" title="3. 用PS搞个头像，哈哈"></a>3. 用PS搞个头像，哈哈</h3><p><img src="4.png" alt=""></p>]]></content>
+      
+      
+      <categories>
+          
+          <category> Linux </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> Photoshop </tag>
+            
+            <tag> Linux </tag>
+            
+            <tag> web前端 </tag>
+            
+            <tag> Unix </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>张登友的hexo博客</title>
+      <link href="/postname.html"/>
+      <url>/postname.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i></p><h3 id="github托管代码，"><a href="#github托管代码，" class="headerlink" title="github托管代码，"></a>github托管代码，</h3><p>免去买服务器的烦恼,但是速度很慢</p><h3 id="github界面"><a href="#github界面" class="headerlink" title="github界面"></a>github界面</h3><p><img src="git.png" alt=""></p><h3 id="hexo运行中的状态"><a href="#hexo运行中的状态" class="headerlink" title="hexo运行中的状态"></a>hexo运行中的状态</h3><p><img src="hexo.png" alt=""></p><h3 id="主要优势"><a href="#主要优势" class="headerlink" title="主要优势"></a>主要优势</h3><p>使用Hexo加github的完美结合，除了因为GitHub是外国的速度慢点以外没有别的缺点。</p>]]></content>
+      
+      
+      <categories>
+          
+          <category> web前端 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> Linux </tag>
+            
+            <tag> web前端 </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>Hello World</title>
+      <link href="/hello-world.html"/>
+      <url>/hello-world.html</url>
+      
+        <content type="html"><![CDATA[<p><i style="opacity: 0.0;">张登友，张登友的博客，张登友的网站——</i><br>Welcome to <a href="https://hexo.io/" target="_blank" rel="noopener">Hexo</a>! This is your very first post. Check <a href="https://hexo.io/docs/" target="_blank" rel="noopener">documentation</a> for more info. If you get any problems when using Hexo, you can find the answer in <a href="https://hexo.io/docs/troubleshooting.html" target="_blank" rel="noopener">troubleshooting</a> or you can ask me on <a href="https://github.com/hexojs/hexo/issues" target="_blank" rel="noopener">GitHub</a>.</p><h2 id="Quick-Start"><a href="#Quick-Start" class="headerlink" title="Quick Start"></a>Quick Start</h2><h3 id="Create-a-new-post"><a href="#Create-a-new-post" class="headerlink" title="Create a new post"></a>Create a new post</h3><pre class="line-numbers language-bash"><code class="language-bash">$ hexo new <span class="token string">"My New Post"</span><span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>More info: <a href="https://hexo.io/docs/writing.html" target="_blank" rel="noopener">Writing</a></p><h3 id="Run-server"><a href="#Run-server" class="headerlink" title="Run server"></a>Run server</h3><pre class="line-numbers language-bash"><code class="language-bash">$ hexo server<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>More info: <a href="https://hexo.io/docs/server.html" target="_blank" rel="noopener">Server</a></p><h3 id="Generate-static-files"><a href="#Generate-static-files" class="headerlink" title="Generate static files"></a>Generate static files</h3><pre class="line-numbers language-bash"><code class="language-bash">$ hexo generate<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>More info: <a href="https://hexo.io/docs/generating.html" target="_blank" rel="noopener">Generating</a></p><h3 id="Deploy-to-remote-sites"><a href="#Deploy-to-remote-sites" class="headerlink" title="Deploy to remote sites"></a>Deploy to remote sites</h3><pre class="line-numbers language-bash"><code class="language-bash">$ hexo deploy<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre><p>More info: <a href="https://hexo.io/docs/deployment.html" target="_blank" rel="noopener">Deployment</a></p>]]></content>
+      
+      
+      <categories>
+          
+          <category> 学习日志 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> Linux </tag>
+            
+            <tag> hexo </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+  
+  
+</search>
